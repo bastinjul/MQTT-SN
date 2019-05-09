@@ -18,8 +18,6 @@
 /*---------------------------------------------------------------------------*/
 /* Structures */
 struct dodag {
-  uint8_t in;
-  uint8_t id;
   linkaddr_t parent;
   uint8_t rank;
 };
@@ -49,8 +47,7 @@ static struct dodag *dodag_instance;
 /* Processes */
 PROCESS(broadcast_dio_process, "Broadcasting dio messages");
 PROCESS(enter_dodag, "Search and enter in dodag");
-PROCESS(dao_unicast, "Dao unicast exchange");
-AUTOSTART_PROCESSES(&enter_dodag, &dao_unicast, &broadcast_dio_process);
+AUTOSTART_PROCESSES(&enter_dodag, &broadcast_dio_process);
 /*---------------------------------------------------------------------------*/
 /* Function called when broadcast message is received*/
 static void dio_recv(struct broadcast_conn *c, const linkaddr_t *from)
@@ -84,7 +81,7 @@ static void dio_recv(struct broadcast_conn *c, const linkaddr_t *from)
   struct possible_parents *test = list_head(possible_parents_list);
   printf("test : %d.%d\n", test->addr.u8[0], test->addr.u8[1]);
 
-  process_post(&enter_dodag, PROCESS_EVENT_CONTINUE, NULL);
+  process_post_synch(&enter_dodag, PROCESS_EVENT_CONTINUE, NULL);
 
 }
 
@@ -92,6 +89,7 @@ static const struct broadcast_callbacks broadcast_dio_call = {dio_recv};
 static struct broadcast_conn broadcast_dio;
 /*---------------------------------------------------------------------------*/
 /* Function called when unicast */
+/*
 static void
 recv_uc_dao(struct unicast_conn *c, const linkaddr_t *from)
 {
@@ -101,7 +99,8 @@ recv_uc_dao(struct unicast_conn *c, const linkaddr_t *from)
   dodag_instance->id = (uint8_t) atoi((char *)packetbuf_dataptr());
   dodag_instance->in = 1;
 
-  process_post(&dao_unicast, PROCESS_EVENT_CONTINUE, NULL);
+  process_post_synch(&dao_unicast, PROCESS_EVENT_CONTINUE, NULL);
+  //process_post_synch(&enter_dodag, PROCESS_EVENT_CONTINUE, NULL);
 }
 static void
 sent_uc_dao(struct unicast_conn *c, int status, int num_tx)
@@ -115,7 +114,7 @@ sent_uc_dao(struct unicast_conn *c, int status, int num_tx)
     dest->u8[0], dest->u8[1], status, num_tx);
 }
 static const struct unicast_callbacks dao_callbacks = {recv_uc_dao, sent_uc_dao};
-static struct unicast_conn dao_uc;
+static struct unicast_conn dao_uc;*/
 /*---------------------------------------------------------------------------*/
 static void broadcast_recv(struct broadcast_conn *c, const linkaddr_t *from) {
   printf("broadcast message received from %d.%d: '%s'\n",
@@ -130,23 +129,24 @@ PROCESS_THREAD(broadcast_dio_process, ev, data)
 {
   static struct etimer et;
 
-  PROCESS_EXITHANDLER(broadcast_close(&broadcast);)
+  PROCESS_EXITHANDLER(broadcast_close(&broadcast_dio);)
 
   PROCESS_BEGIN();
 
-  broadcast_open(&broadcast, 130, &broadcast_call);
-
   PROCESS_WAIT_EVENT();
 
-  while(1) {
+  broadcast_open(&broadcast_dio, 129, &broadcast_call);
 
-    /* Delay 2-4 seconds */
-    etimer_set(&et, CLOCK_SECOND * DIO_TRANSMITION_SECONDS * 2);
+  while(1) {
+    etimer_set(&et, CLOCK_SECOND * DIO_TRANSMITION_SECONDS);
 
     PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&et));
-
-    packetbuf_copyfrom(&dodag_instance->id, sizeof(dodag_instance->id));
-    broadcast_send(&broadcast);
+    printf("rank : %i, parent : %d.%d\n", dodag_instance->rank, dodag_instance->parent.u8[0],
+            dodag_instance->parent.u8[1]);
+    uint8_t rk = dodag_instance->rank;
+    packetbuf_clear();
+    packetbuf_copyfrom(&rk, sizeof(rk));
+    broadcast_send(&broadcast_dio);
     printf("broadcast message sent\n");
   }
 
@@ -167,17 +167,13 @@ PROCESS_THREAD(enter_dodag, ev, data)
 
   static struct etimer et;
 
-  dodag_instance->id = 0;
   dodag_instance->rank = 100;
-  dodag_instance->in = 0;
   dodag_instance->parent = linkaddr_null;
 
   broadcast_open(&broadcast_dio, 129, &broadcast_dio_call);
 
   /* We wait for a first broadcast message */
 
-  //pp = list_head(possible_parents_list);
-  //PROCESS_YIELD_UNTIL(pp != NULL);
   PROCESS_WAIT_EVENT();
 
   /* When a broadcast message is received, we wait for others messages from others nodes */
@@ -206,41 +202,13 @@ PROCESS_THREAD(enter_dodag, ev, data)
 
   linkaddr_copy(&dodag_instance->parent, &cp->addr);
   dodag_instance->rank = cp->rank+1;
-
-  printf("dodag_instance parent : %d.%d\n", dodag_instance->parent.u8[0], dodag_instance->parent.u8[1]);
+  printf("rank_dodag : %i, rank cp : %i\n", dodag_instance->rank, cp->rank);
 
   /* Then we ask to this choosen parent to enter in the dodag */
-  process_post(&dao_unicast, PROCESS_EVENT_CONTINUE, NULL);
-
+  process_post(&broadcast_dio_process, PROCESS_EVENT_CONTINUE, NULL);
+  //process_start(&dao_unicast, NULL);
 
   PROCESS_END();
 }
 
 /*---------------------------------------------------------------------------*/
-/* Process launch to send dao message to chosen parent */
-PROCESS_THREAD(dao_unicast, ev, data)
-{
-
-  PROCESS_EXITHANDLER(unicast_close(&dao_uc);)
-  PROCESS_BEGIN();
-
-  unicast_open(&dao_uc, 146, &dao_callbacks);
-
-  PROCESS_WAIT_EVENT();
-
-  dodag_instance->parent.u8[1] = 0;
-
-  printf("sending unicast to %d.%d\n",
-    dodag_instance->parent.u8[0], dodag_instance->parent.u8[1]);
-
-  packetbuf_copyfrom("dao", sizeof("dao"));
-  unicast_send(&dao_uc, &dodag_instance->parent);
-  printf("print qqch\n");
-
-  PROCESS_WAIT_EVENT();
-
-  process_post(&broadcast_dio_process, PROCESS_EVENT_CONTINUE, NULL);
-
-  PROCESS_END();
-
-}

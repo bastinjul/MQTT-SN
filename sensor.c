@@ -1,6 +1,7 @@
 #include "contiki.h"
 #include "net/rime/rime.h"
 #include "net/rime/broadcast.h"
+#include "net/rime/unicast.h"
 #include "random.h"
 
 #include "dev/button-sensor.h"
@@ -28,9 +29,11 @@ recv_uc(struct unicast_conn *c, const linkaddr_t *from)
   printf("unicast message received from %d.%d\n",
 	 from->u8[0], from->u8[1]);
 
-  linkaddr_t *addr = from;
+  linkaddr_t addr;
 
-  process_post(&unicast_process, PROCESS_EVENT_CONTINUE, addr);
+  linkaddr_copy(&addr, from);
+
+  process_post_synch(&unicast_process, PROCESS_EVENT_CONTINUE, &addr);
 }
 static const struct unicast_callbacks unicast_callbacks = {recv_uc};
 static struct unicast_conn uc;
@@ -52,7 +55,8 @@ PROCESS_THREAD(sensor_process, ev, data)
 
     PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&et));
 
-    packetbuf_copyfrom("0", sizeof("0"));
+    packetbuf_clear();
+    packetbuf_copyfrom("1", sizeof("1"));
     broadcast_send(&broadcast);
     printf("broadcast message sent\n");
   }
