@@ -21,26 +21,28 @@ struct dodag {
   linkaddr_t parent;
   uint8_t rank;
 };
-
+/*
 struct children{
   struct children *next;
   linkaddr_t addr;
-};
+};*/
 
 struct possible_parents {
   struct possible_parents *next;
   linkaddr_t addr;
   uint16_t rssi;
+  uint16_t lqi;
   uint16_t rank;
 };
 
 #define MAX_POSSIBLE_PARENTS 16
 MEMB(possible_parents_memb, struct possible_parents, MAX_POSSIBLE_PARENTS);
 LIST(possible_parents_list);
-
+/*
 #define MAX_CHILDREN 16
 MEMB(children_memb, struct children, MAX_CHILDREN);
 LIST(children_list);
+*/
 
 static struct dodag *dodag_instance;
 /*---------------------------------------------------------------------------*/
@@ -77,9 +79,10 @@ static void dio_recv(struct broadcast_conn *c, const linkaddr_t *from)
   }
 
   pp->rssi = packetbuf_attr(PACKETBUF_ATTR_RSSI);
+  pp->lqi = packetbuf_attr(PACKETBUF_ATTR_LINK_QUALITY);
 
   struct possible_parents *test = list_head(possible_parents_list);
-  printf("test : %d.%d\n", test->addr.u8[0], test->addr.u8[1]);
+  printf("rssi : %d, lqi : %d\n", test->rssi, test->lqi);
 
   process_post_synch(&enter_dodag, PROCESS_EVENT_CONTINUE, NULL);
 
@@ -122,7 +125,7 @@ static void broadcast_recv(struct broadcast_conn *c, const linkaddr_t *from) {
 }
 
 static const struct broadcast_callbacks broadcast_call = {broadcast_recv};
-static struct broadcast_conn broadcast;
+//static struct broadcast_conn broadcast;
 /*---------------------------------------------------------------------------*/
 /* Broadcast dio messages process thread */
 PROCESS_THREAD(broadcast_dio_process, ev, data)
@@ -144,8 +147,12 @@ PROCESS_THREAD(broadcast_dio_process, ev, data)
     printf("rank : %i, parent : %d.%d\n", dodag_instance->rank, dodag_instance->parent.u8[0],
             dodag_instance->parent.u8[1]);
     uint8_t rk = dodag_instance->rank;
+    int length = snprintf(NULL, 0, "%d", rk);
+    char msg[length+1];
+    snprintf(msg, length + 1, "%d", rk);
+    printf("msg : %s\n", msg);
     packetbuf_clear();
-    packetbuf_copyfrom(&rk, sizeof(rk));
+    packetbuf_copyfrom(&msg, sizeof(msg));
     broadcast_send(&broadcast_dio);
     printf("broadcast message sent\n");
   }
@@ -190,7 +197,7 @@ PROCESS_THREAD(enter_dodag, ev, data)
     if(cp == NULL){
       cp = list_head(possible_parents_list);
     }
-    if(pp->rank < cp->rank || (pp->rank == cp->rank && pp->rssi < cp->rssi)){
+    if(pp->rank < cp->rank || (pp->rank == cp->rank && pp->rssi > cp->rssi)){
       cp = list_head(possible_parents_list);
     }
   }
@@ -203,6 +210,10 @@ PROCESS_THREAD(enter_dodag, ev, data)
   linkaddr_copy(&dodag_instance->parent, &cp->addr);
   dodag_instance->rank = cp->rank+1;
   printf("rank_dodag : %i, rank cp : %i\n", dodag_instance->rank, cp->rank);
+
+  etimer_reset(&et);
+
+  PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&et));
 
   /* Then we ask to this choosen parent to enter in the dodag */
   process_post(&broadcast_dio_process, PROCESS_EVENT_CONTINUE, NULL);
