@@ -48,10 +48,9 @@ PROCESS_THREAD(gateway_process, ev, data)
 
   broadcast_open(&broadcast, 129, &broadcast_call);
 
-  while(1) {
+  etimer_set(&et, CLOCK_SECOND * 5);
 
-    /* Delay 2-4 seconds */
-    etimer_set(&et, CLOCK_SECOND * 5);
+  while(1) {
 
     PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&et));
 
@@ -59,6 +58,8 @@ PROCESS_THREAD(gateway_process, ev, data)
     packetbuf_copyfrom("1", sizeof("1"));
     broadcast_send(&broadcast);
     printf("broadcast message sent\n");
+
+    etimer_reset(&et);
   }
 
   PROCESS_END();
