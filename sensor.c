@@ -56,6 +56,7 @@ static struct sending *period;
 static struct sensor_data *temp_data;
 static struct sensor_data *hum_data;
 static struct dodag *dodag_instance;
+
 /*---------------------------------------------------------------------------*/
 /* Processes */
 PROCESS(broadcast_dio_process, "Broadcasting dio messages");
@@ -95,7 +96,8 @@ static void dio_recv(struct broadcast_conn *c, const linkaddr_t *from)
 
   pp->rssi = packetbuf_attr(PACKETBUF_ATTR_RSSI);
 
-  process_post_synch(&enter_dodag, PROCESS_EVENT_CONTINUE, NULL);
+  // process_post_synch(&enter_dodag, PROCESS_EVENT_CONTINUE, NULL);
+  process_post(&enter_dodag, PROCESS_EVENT_CONTINUE, NULL);
 
 }
 
@@ -161,20 +163,28 @@ static const struct broadcast_callbacks broadcast_call = {broadcast_recv};
 /* Broadcast dio messages process thread */
 PROCESS_THREAD(broadcast_dio_process, ev, data)
 {
-  static struct etimer et;
-
+  static struct etimer et_bc;
   PROCESS_EXITHANDLER(broadcast_close(&broadcast_dio);)
 
   PROCESS_BEGIN();
 
-  PROCESS_WAIT_EVENT();
+  printf("dio begin\n");
 
+  PROCESS_WAIT_EVENT();
+  printf("dio post wait\n");
   broadcast_open(&broadcast_dio, 129, &broadcast_call);
 
-  while(1) {
-    etimer_set(&et, CLOCK_SECOND * DIO_TRANSMITION_SECONDS);
 
-    PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&et));
+
+  while(1) {
+
+    printf("dio enter while\n");
+    etimer_set(&et_bc, CLOCK_SECOND * DIO_TRANSMITION_SECONDS);
+    PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&et_bc));
+
+    printf("dio post timer wait\n");
+
+
     printf("rank : %i, parent : %d.%d\n", dodag_instance->rank, dodag_instance->parent.u8[0],
             dodag_instance->parent.u8[1]);
     uint8_t rk = dodag_instance->rank;
@@ -184,6 +194,8 @@ PROCESS_THREAD(broadcast_dio_process, ev, data)
     packetbuf_clear();
     packetbuf_copyfrom(&msg, sizeof(msg));
     broadcast_send(&broadcast_dio);
+
+    //etimer_restart(&et_bc);
   }
 
   PROCESS_END();
@@ -193,15 +205,13 @@ PROCESS_THREAD(broadcast_dio_process, ev, data)
 /* Enter in dodag process thread */
 PROCESS_THREAD(enter_dodag, ev, data)
 {
-  struct possible_parents *pp;
-  struct possible_parents *cp;
+  static struct possible_parents *pp;
+  static struct possible_parents *cp;
   cp = NULL;
 
   PROCESS_EXITHANDLER(broadcast_close(&broadcast_dio);)
 
   PROCESS_BEGIN();
-
-  static struct etimer et;
 
   dodag_instance->rank = 100;
   dodag_instance->parent = linkaddr_null;
@@ -210,7 +220,13 @@ PROCESS_THREAD(enter_dodag, ev, data)
 
   /* We wait for a first broadcast message */
 
+  printf("coucou\n");
+
   PROCESS_WAIT_EVENT();
+
+  printf("petite perruche\n");
+
+  static struct etimer et;
 
   /* When a broadcast message is received, we wait for others messages from others nodes */
   etimer_set(&et, CLOCK_SECOND * DIO_TRANSMITION_SECONDS * 2);
@@ -240,8 +256,7 @@ PROCESS_THREAD(enter_dodag, ev, data)
   dodag_instance->rank = cp->rank+1;
   printf("rank_dodag : %i, rank cp : %i\n", dodag_instance->rank, cp->rank);
 
-  etimer_reset(&et);
-
+  etimer_restart(&et);
   PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&et));
 
   /* then messages are broadcast so that new nodes become aware of the existence of the dodag */
@@ -250,10 +265,18 @@ PROCESS_THREAD(enter_dodag, ev, data)
   /* Then we can send data to the gateway */
   period->periodical_data_sent = 1;
   period->period = 20;
+
   process_post(&send_temp_data, PROCESS_EVENT_CONTINUE, NULL);
   process_post(&send_hum_data, PROCESS_EVENT_CONTINUE, NULL);
   process_post(&generate_temp_data, PROCESS_EVENT_CONTINUE, NULL);
   process_post(&generate_hum_data, PROCESS_EVENT_CONTINUE, NULL);
+
+  /*process_start(&send_temp_data, NULL);
+  process_start(&send_hum_data, NULL);
+  process_start(&generate_temp_data, NULL);
+  process_start(&generate_hum_data, NULL);*/
+
+  printf("test\n");
 
   PROCESS_END();
 }
@@ -262,25 +285,31 @@ PROCESS_THREAD(enter_dodag, ev, data)
 /* Process to send temperature data to the gateway */
 PROCESS_THREAD(send_temp_data, ev, data)
 {
-  static struct etimer et;
 
   PROCESS_EXITHANDLER(unicast_close(&sensor_data_uc);)
 
   PROCESS_BEGIN();
 
-  unicast_open(&sensor_data_uc, 146, &sensor_data_callbacks);
+  printf("temp begin\n");
 
   PROCESS_WAIT_EVENT();
 
+  unicast_open(&sensor_data_uc, 146, &sensor_data_callbacks);
+
+
+
   while(1){
+    printf("Temp\n");
     if(period->periodical_data_sent){
       /* We sent data periodically */
-      etimer_set(&et, CLOCK_SECOND * period->period);
-      PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&et));
+      static struct etimer et_temp;
+      etimer_set(&et_temp, CLOCK_SECOND * period->period);
+      PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&et_temp));
+      printf("Temp2\n");
     }
     else {
       /* We sent data when the value data change */
-      PROCESS_WAIT_EVENT();
+      PROCESS_WAIT_EVENT_UNTIL(ev == PROCESS_EVENT_CONTINUE);
     }
 
     uint8_t v = temp_data->value;
@@ -298,7 +327,11 @@ PROCESS_THREAD(send_temp_data, ev, data)
     packetbuf_clear();
     packetbuf_copyfrom(&p1, sizeof(p1));
 
+    printf("unicast sent to %d.%d\n", dodag_instance->parent.u8[0], dodag_instance->parent.u8[1]);
+
     unicast_send(&sensor_data_uc ,&dodag_instance->parent);
+
+    //etimer_reset(&et_temp);
   }
 
   PROCESS_END();
@@ -307,25 +340,28 @@ PROCESS_THREAD(send_temp_data, ev, data)
 /* Process to send temperature data to the gateway */
 PROCESS_THREAD(send_hum_data, ev, data)
 {
-  static struct etimer et;
-
   PROCESS_EXITHANDLER(unicast_close(&sensor_data_uc);)
 
   PROCESS_BEGIN();
 
-  unicast_open(&sensor_data_uc, 146, &sensor_data_callbacks);
+  printf("hum begin\n");
 
   PROCESS_WAIT_EVENT();
 
+  unicast_open(&sensor_data_uc, 146, &sensor_data_callbacks);
+
   while(1){
+    printf("hum\n");
     if(period->periodical_data_sent){
       /* We sent data periodically */
-      etimer_set(&et, CLOCK_SECOND * period->period);
-      PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&et));
+      static struct etimer et_hum;
+      etimer_set(&et_hum, CLOCK_SECOND * period->period);
+      PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&et_hum));
+      printf("hum\n");
     }
     else {
       /* We sent data when the value data change */
-      PROCESS_WAIT_EVENT();
+      PROCESS_WAIT_EVENT_UNTIL(ev == PROCESS_EVENT_CONTINUE);
     }
 
     uint8_t v = hum_data->value;
@@ -343,7 +379,12 @@ PROCESS_THREAD(send_hum_data, ev, data)
     packetbuf_clear();
     packetbuf_copyfrom(&p1, sizeof(p1));
 
+    printf("unicast sent to %d.%d\n", dodag_instance->parent.u8[0], dodag_instance->parent.u8[1]);
+
     unicast_send(&sensor_data_uc ,&dodag_instance->parent);
+
+
+    //etimer_reset(&et_hum);
   }
 
   PROCESS_END();
@@ -352,19 +393,23 @@ PROCESS_THREAD(send_hum_data, ev, data)
 /* Generation of random temperature after a random amount of time */
 PROCESS_THREAD(generate_temp_data, ev, data)
 {
-  static struct etimer et;
-
   PROCESS_BEGIN();
+
+  printf("gen temp begin\n");
+
+  PROCESS_WAIT_EVENT();
 
   temp_data->topic = 1;
   temp_data->value = 18;
 
-  PROCESS_WAIT_EVENT();
   /* Send a broadcast every 16 - 32 seconds */
-  etimer_set(&et, CLOCK_SECOND * 16 + random_rand() % (CLOCK_SECOND * 16));
+
 
   while (1) {
-    PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&et));
+    static struct etimer et_gt;
+    etimer_set(&et_gt, CLOCK_SECOND * 16 + random_rand() % (CLOCK_SECOND * 16));
+    PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&et_gt));
+    printf("gen_temp\n");
 
     temp_data->value = random_rand() % 50; //maximum 50°C
 
@@ -372,7 +417,7 @@ PROCESS_THREAD(generate_temp_data, ev, data)
       process_post(&send_temp_data, PROCESS_EVENT_CONTINUE, NULL);
     }
 
-    etimer_reset(&et);
+    //etimer_reset(&et_gt);
   }
 
   PROCESS_END();
@@ -381,20 +426,24 @@ PROCESS_THREAD(generate_temp_data, ev, data)
 /* Generation of random humidity after a random amount of time */
 PROCESS_THREAD(generate_hum_data, ev, data)
 {
-  static struct etimer et;
 
   PROCESS_BEGIN();
+
+  printf("gen hum begin\n");
+
+  PROCESS_WAIT_EVENT();
 
   hum_data->topic = 2;
   hum_data->value = 20;
 
-  PROCESS_WAIT_EVENT();
-
   /* Send a broadcast every 16 - 32 seconds */
-  etimer_set(&et, CLOCK_SECOND * 16 + random_rand() % (CLOCK_SECOND * 16));
+
 
   while (1) {
-    PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&et));
+    static struct etimer et_gh;
+    etimer_set(&et_gh, CLOCK_SECOND * 16 + random_rand() % (CLOCK_SECOND * 16));
+    PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&et_gh));
+    printf("gen_hum\n");
 
     hum_data->value = random_rand() % 100; //maximum 100% humidity
 
@@ -402,7 +451,7 @@ PROCESS_THREAD(generate_hum_data, ev, data)
       process_post(&send_hum_data, PROCESS_EVENT_CONTINUE, NULL);
     }
 
-    etimer_reset(&et);
+    //etimer_reset(&et_gh);
   }
 
   PROCESS_END();
