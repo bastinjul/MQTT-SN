@@ -30,12 +30,15 @@ struct node {
 struct tree {
   uint8_t in_tree;
   uint8_t rank;
-  struct node parent;
+  struct node *parent;
   uint8_t periodic;
 };
 /*---------------------------------------------------------------------------*/
 /* Variables */
-static struct tree *tree;
+static struct tree *tree_instance;
+static struct broadcast_conn broadcast;
+static struct unicast_conn unicast;
+static struct runicast_conn runicast;
 /*---------------------------------------------------------------------------*/
 /* Lists */
 MEMB(passive_view_memb, struct node, MAX_PASSIVE_VIEW);
@@ -50,26 +53,26 @@ PROCESS(sensor_data, "data management");
 AUTOSTART_PROCESSES(&tree, &sensor_data);
 /*---------------------------------------------------------------------------*/
 /* Auxiliary functions */
-static char* intToString(uint8_t i){
+/*static char* intToString(uint8_t i){
   int length = snprintf(NULL, 0, "%d", i);
   char str[length+1];
   snprintf(str, length + 1, "%d", i);
   return str;
-}
+}*/
 
 static void chooseParent(){
-  static struct node *n;
+  struct node *n;
 
   for(n = list_head(passive_view); n != NULL; n = list_item_next(n)){
-    if(tree->parent == NULL){
-      tree->parent = n;
+    if(tree_instance->parent == NULL){
+      tree_instance->parent = n;
     }
-    if(n->rank < tree->parent.rank || (tree->parent.rank == n->rank && n->rssi > tree->parent.rssi)){
-      tree->parent = n;
+    if(n->rank < tree_instance->parent->rank || (tree_instance->parent->rank == n->rank && n->rssi > tree_instance->parent->rssi)){
+      tree_instance->parent = n;
     }
   }
 
-  tree->rank = tree->parent.rank + 1;
+  tree_instance->rank = tree_instance->parent->rank + 1;
 }
 
 /*---------------------------------------------------------------------------*/
@@ -78,7 +81,7 @@ static void unicast_recv(struct unicast_conn *c, const linkaddr_t *from){
   printf("unicast message received from %d.%d : '%s'\n", from->u8[0], from->u8[1],
     (char *)packetbuf_dataptr());
 
-  /* we've receive a message froml a potential parent, we add this node in the passive_view */
+  /* we've receive a message from a potential parent, we add this node in the passive_view */
   struct node *n;
 
   for(n = list_head(passive_view); n != NULL; n = list_item_next(n)){
@@ -101,8 +104,8 @@ static void unicast_recv(struct unicast_conn *c, const linkaddr_t *from){
 
   n->rssi = packetbuf_attr(PACKETBUF_ATTR_RSSI);
 
-  if(!tree->in_tree) {
-    tree->in_tree = 1;
+  if(!tree_instance->in_tree) {
+    tree_instance->in_tree = 1;
   }
 
   chooseParent();
@@ -118,7 +121,6 @@ static void unicast_sent(struct unicast_conn *c, int status, int num_tx){
     dest->u8[0], dest->u8[1], status, num_tx);
 }
 static const struct unicast_callbacks unicast_call = {unicast_recv, unicast_sent};
-static struct unicast_conn unicast;
 
 /*---------------------------------------------------------------------------*/
 /* broadcast callback function */
@@ -127,23 +129,25 @@ static void broadcast_recv(struct broadcast_conn *c, const linkaddr_t *from){
     (char *)packetbuf_dataptr());
 
   /* if this node is in the tree, send an unicast message with the rank of the node */
-  if(tree->in_tree){
-    char* msg = intToString(tree->rank);
+  if(tree_instance->in_tree){
+    int length = snprintf(NULL, 0, "%d", tree_instance->rank);
+    char msg[length+1];
+    snprintf(msg, length + 1, "%d", tree_instance->rank);
     packetbuf_clear();
     packetbuf_copyfrom(&msg, sizeof(msg));
     unicast_send(&unicast, from);
   }
 }
-static const struct broadcast_callbacks broadcast_calll = {broadcast_recv};
-static struct broadcast_conn broadcast;
+static const struct broadcast_callbacks broadcast_call = {broadcast_recv};
 
 /*---------------------------------------------------------------------------*/
 /* runicast callback function */
+
 static void runicast_recv(struct runicast_conn *c, const linkaddr_t *from, uint8_t seqno){
   printf("runicast message received from %d.%d, seqno %d\n",
 	 from->u8[0], from->u8[1], seqno);
 
-   struct children *ch;
+   struct node *ch;
 
    for(ch = list_head(children_list); ch != NULL; ch = list_item_next(ch)){
      if(linkaddr_cmp(&ch->addr, from)){
@@ -152,7 +156,7 @@ static void runicast_recv(struct runicast_conn *c, const linkaddr_t *from, uint8
    }
 
    if(ch == NULL) {
-     ch = memb_alloc(&children_memb);
+     ch = memb_alloc(&children_list_memb);
 
      if(ch == NULL) {
        return;
@@ -168,7 +172,7 @@ static void runicast_recv(struct runicast_conn *c, const linkaddr_t *from, uint8
    packetbuf_clear();
    packetbuf_copyfrom((char *)packetbuf_dataptr, sizeof((char *)packetbuf_dataptr));
 
-   runicast_send(&runicast, &tree->parent, MAX_RETRANSMISSION);
+   runicast_send(&runicast, &tree_instance->parent->addr, MAX_RETRANSMISSION);
 }
 static void runicast_sent(struct runicast_conn *c, const linkaddr_t *to, uint8_t retransmissions){
   printf("runicast message sent to %d.%d, retransmissions %d\n",
@@ -181,12 +185,13 @@ static void runicast_timedout(struct runicast_conn *c, const linkaddr_t *to, uin
   chooseParent();
 }
 static const struct runicast_callbacks runicast_call = {runicast_recv, runicast_sent, runicast_timedout};
-static struct runicast_conn runicast;
 
 /*---------------------------------------------------------------------------*/
 /* tree process */
 PROCESS_THREAD(tree, ev, data){
 
+  static struct etimer et;
+  static char* msg;
   PROCESS_EXITHANDLER(
     broadcast_close(&broadcast);
     unicast_close(&unicast);
@@ -195,29 +200,40 @@ PROCESS_THREAD(tree, ev, data){
   PROCESS_BEGIN();
 
   /* Variables initialization */
-  tree->in_tree = false;
-  tree->rank = 100;
-  tree->parent = NULL;
-  tree->periodic = 1;
+  tree_instance->in_tree = 0;
+  tree_instance->rank = 100;
+  tree_instance->parent = NULL;
+  tree_instance->periodic = 1;
+  msg = "Hi";
 
   /* broadcast and unicast open */
-  broadcast_open(&broadcast, 129, &broadcast_call);
   unicast_open(&unicast, 146, &unicast_call);
+  broadcast_open(&broadcast, 129, &broadcast_call);
 
-  while(!tree->in_tree){
-    static struct etimer et;
-    etimer_set(&et, CLOCK_SECOND * DISCOVERY_TIME_WAIT);
+  etimer_set(&et, CLOCK_SECOND * DISCOVERY_TIME_WAIT);
+
+  while(!tree_instance->in_tree){
+    printf("in while\n");
+
     PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&et));
     /* We send discovery messages as long as we are not in the tree */
     packetbuf_clear();
-    packetbuf_copyfrom("Hi", sizeof("Hi"));
+
+    packetbuf_copyfrom(&msg, sizeof(msg));
     broadcast_send(&broadcast);
+    printf("broadcast sent\n");
+
+    etimer_reset(&et);
   }
 
   process_post(&sensor_data, PROCESS_EVENT_CONTINUE, NULL);
 
   while(1){
     /* we wait possible broadcast and unicast messages */
+    static struct etimer ett;
+    etimer_set(&ett, CLOCK_SECOND * 7);
+    PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&ett));
+    printf("print qqch\n");
   }
 
   PROCESS_END();
@@ -231,13 +247,13 @@ PROCESS_THREAD(sensor_data, ev, data){
 
   PROCESS_BEGIN();
 
-  runicast_open(&runicast, 144, &runicast_call);
-
   PROCESS_WAIT_EVENT();
+
+  runicast_open(&runicast, 144, &runicast_call);
 
   while(1) {
     static struct etimer et;
-    if(tree->periodic){
+    if(tree_instance->periodic){
       etimer_set(&et, CLOCK_SECOND * DATA_TRANSFER);
     }
     else {
@@ -248,23 +264,35 @@ PROCESS_THREAD(sensor_data, ev, data){
     uint8_t temp = random_rand() % 50;
     uint8_t hum = random_rand() % 100;
 
-    char* msg_temp = intToString(temp);
-    char* msg_hum = intToString(hum);
-    char* addr0 = intToString(linkaddr_node_addr.u8[0]);
-    char* addr1 = intToString(linkaddr_node_addr.u8[1]);
+    /* change uint8_t variables into string */
+    int length_addr = snprintf(NULL, 0, "%d", linkaddr_node_addr.u8[0]);
+    char addr_str[length_addr+1];
+    snprintf(addr_str, length_addr + 1, "%d", linkaddr_node_addr.u8[0]);
+
+    int length_addr2 = snprintf(NULL, 0, "%d", linkaddr_node_addr.u8[1]);
+    char addr2_str[length_addr2+1];
+    snprintf(addr2_str, length_addr2 + 1, "%d", linkaddr_node_addr.u8[1]);
+
+    int length_temp = snprintf(NULL, 0, "%d", temp);
+    char temp_str[length_temp+1];
+    snprintf(temp_str, length_temp + 1, "%d", temp);
+
+    int length_hum = snprintf(NULL, 0, "%d", hum);
+    char hum_str[length_hum+1];
+    snprintf(hum_str, length_hum + 1, "%d", hum);
 
     char* msg = "";
-    strcat(msg, addr0);
+    strcat(msg, addr_str);
     strcat(msg, ".");
-    strcat(msg, addr1);
+    strcat(msg, addr2_str);
     strcat(msg, ", 1 = ");
-    strcat(msg, msg_temp);
+    strcat(msg, temp_str);
     strcat(msg, ", 2 = ");
-    strcat(msg, msg_hum);
+    strcat(msg, hum_str);
 
     packetbuf_copyfrom(msg, sizeof(msg));
 
-    runicast_send(&runicast, &tree->parent.addr, MAX_RETRANSMISSION);
+    runicast_send(&runicast, &tree_instance->parent->addr, MAX_RETRANSMISSION);
   }
 
   PROCESS_END();
