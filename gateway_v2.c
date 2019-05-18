@@ -1,11 +1,13 @@
 #include "contiki.h"
+#include "contiki-lib.h"
+#include "contiki-net.h"
 #include "net/rime/rime.h"
 #include "net/rime/broadcast.h"
 #include "net/rime/unicast.h"
 #include "random.h"
 #include "lib/list.h"
 #include "lib/memb.h"
-
+#include "dev/serial-line.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -26,10 +28,10 @@ static struct runicast_conn runicast;
 /*---------------------------------------------------------------------------*/
 /* Processes */
 PROCESS(tree, "tree construction");
-AUTOSTART_PROCESSES(&tree);
+PROCESS(serial, "get serial messages");
+AUTOSTART_PROCESSES(&tree, &serial);
 /*---------------------------------------------------------------------------*/
 /* Auxiliary functions */
-
 /*---------------------------------------------------------------------------*/
 /* unicast callback function */
 static void
@@ -50,6 +52,8 @@ static void broadcast_recv(struct broadcast_conn *c, const linkaddr_t *from){
     /* reply with the rank of the root */
     packetbuf_copyfrom("1", sizeof("1"));
     unicast_send(&unicast, from);
+
+    //TODO: add node to children_list
 }
 static const struct broadcast_callbacks broadcast_call = {broadcast_recv};
 
@@ -89,6 +93,22 @@ PROCESS_THREAD(tree, ev, data){
     etimer_set(&et, CLOCK_SECOND * 7);
     PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&et));
     printf("print qqch\n");
+  }
+
+  PROCESS_END();
+}
+
+/*---------------------------------------------------------------------------*/
+/* Process to get input from gateway */
+PROCESS_THREAD(serial, ev, data){
+  PROCESS_BEGIN();
+
+  while(1){
+    PROCESS_WAIT_EVENT();
+    if(ev == serial_line_event_message && data != NULL){
+      printf("input string : %s\n", (const char *) data);
+      //TODO: transfer msg to all children
+    }
   }
 
   PROCESS_END();

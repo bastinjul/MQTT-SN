@@ -106,6 +106,9 @@ static void unicast_recv(struct unicast_conn *c, const linkaddr_t *from){
 
   chooseParent();
 
+  //TODO: if msg recv from parent and msg == 'period' -> set tree_instance->periodic = 1,
+  // else if msg == 'data_change' -> tree_instance->periodic = 0
+
 }
 static void sent_uc(struct unicast_conn *c, int status, int num_tx){
   const linkaddr_t *dest = packetbuf_addr(PACKETBUF_ADDR_RECEIVER);
