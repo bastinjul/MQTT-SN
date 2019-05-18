@@ -19,6 +19,7 @@
 /* Variables */
 static struct broadcast_conn broadcast;
 static struct unicast_conn unicast;
+static struct runicast_conn runicast;
 /*---------------------------------------------------------------------------*/
 /* Lists */
 
@@ -53,17 +54,35 @@ static void broadcast_recv(struct broadcast_conn *c, const linkaddr_t *from){
 static const struct broadcast_callbacks broadcast_call = {broadcast_recv};
 
 /*---------------------------------------------------------------------------*/
+/* runicast callback function */
+
+static void runicast_recv(struct runicast_conn *c, const linkaddr_t *from, uint8_t seqno){
+  printf("%s\n", (char *)packetbuf_dataptr());
+}
+static void runicast_sent(struct runicast_conn *c, const linkaddr_t *to, uint8_t retransmissions){
+  printf("runicast message sent to %d.%d, retransmissions %d\n",
+	 to->u8[0], to->u8[1], retransmissions);
+}
+static void runicast_timedout(struct runicast_conn *c, const linkaddr_t *to, uint8_t retransmissions){
+  printf("runicast message timed out when sending to %d.%d, retransmissions %d\n",
+	 to->u8[0], to->u8[1], retransmissions);
+}
+static const struct runicast_callbacks runicast_call = {runicast_recv, runicast_sent, runicast_timedout};
+
+/*---------------------------------------------------------------------------*/
 /* tree process */
 PROCESS_THREAD(tree, ev, data){
   PROCESS_EXITHANDLER(
     unicast_close(&unicast);
     broadcast_close(&broadcast);
+    runicast_close(&runicast);
   )
 
   PROCESS_BEGIN();
 
   unicast_open(&unicast, 146, &unicast_call);
   broadcast_open(&broadcast, 129, &broadcast_call);
+  runicast_open(&runicast, 144, &runicast_call);
 
   while(1){
     static struct etimer et;

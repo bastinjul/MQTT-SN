@@ -19,19 +19,19 @@
 #define DISCOVERY_TIME_WAIT 5
 #define DATA_TRANSFER 20
 #define DATA_GENERATION 16
-#define MAX_RETRANSMISSION 5
+#define MAX_RETRANSMISSION 10
 /*---------------------------------------------------------------------------*/
 /* Structures */
 struct node {
   struct node *next;
   linkaddr_t addr;
   uint16_t rssi;
-  uint8_t rank;
+  uint16_t rank;
 };
 
 struct tree {
   uint8_t in_tree;
-  uint8_t rank;
+  uint16_t rank;
   struct node *parent;
   uint8_t periodic;
 };
@@ -57,7 +57,7 @@ AUTOSTART_PROCESSES(&tree);
 /* Auxiliary functions */
 
 static void chooseParent(){
-  static struct node *n;
+  struct node *n;
 
   for(n = list_head(passive_view); n != NULL; n = list_item_next(n)){
     if(tree_instance->parent == NULL){
@@ -140,8 +140,12 @@ static const struct broadcast_callbacks broadcast_call = {broadcast_recv};
 /* runicast callback function */
 
 static void runicast_recv(struct runicast_conn *c, const linkaddr_t *from, uint8_t seqno){
-  printf("runicast message received from %d.%d, seqno %d\n",
-	 from->u8[0], from->u8[1], seqno);
+  printf("runicast message received from %d.%d, %s\n",
+	 from->u8[0], from->u8[1], (char *)packetbuf_dataptr());
+
+   if(linkaddr_cmp(&tree_instance->parent->addr, from)){
+     chooseParent();
+   }
 
    static struct node *ch;
 
@@ -165,9 +169,6 @@ static void runicast_recv(struct runicast_conn *c, const linkaddr_t *from, uint8
 
    /* then forward message from child to the gateway */
 
-   packetbuf_clear();
-   packetbuf_copyfrom((char *)packetbuf_dataptr, sizeof((char *)packetbuf_dataptr));
-
    runicast_send(&runicast, &tree_instance->parent->addr, MAX_RETRANSMISSION);
 }
 static void runicast_sent(struct runicast_conn *c, const linkaddr_t *to, uint8_t retransmissions){
@@ -187,7 +188,6 @@ static const struct runicast_callbacks runicast_call = {runicast_recv, runicast_
 PROCESS_THREAD(tree, ev, data){
 
   static struct etimer et;
-  static char* msg;
   PROCESS_EXITHANDLER(
     broadcast_close(&broadcast);
     unicast_close(&unicast);
@@ -200,25 +200,22 @@ PROCESS_THREAD(tree, ev, data){
   tree_instance->rank = 100;
   tree_instance->parent = NULL;
   tree_instance->periodic = 1;
-  msg = "Hi";
 
   /* broadcast and unicast open */
   unicast_open(&unicast, 146, &unicast_call);
   broadcast_open(&broadcast, 129, &broadcast_call);
 
-  while(1){
-    if(tree_instance->in_tree){
-      break;
-    }
+  while(tree_instance->in_tree != 1){
+
     printf("in while\n");
     etimer_set(&et, CLOCK_SECOND * DISCOVERY_TIME_WAIT);
     PROCESS_WAIT_EVENT_UNTIL(ev == PROCESS_EVENT_TIMER);
     /* We send discovery messages as long as we are not in the tree */
     packetbuf_clear();
 
-    packetbuf_copyfrom(&msg, sizeof(msg));
-    int i = broadcast_send(&broadcast);
-    printf("broadcast sent %d\n", i);
+    packetbuf_copyfrom("Hi", sizeof("Hi"));
+    broadcast_send(&broadcast);
+    printf("broadcast sent\n");
   }
 
   process_start(&sensor_data, NULL);
@@ -226,7 +223,7 @@ PROCESS_THREAD(tree, ev, data){
   while(1){
     /* we wait possible broadcast and unicast messages */
     static struct etimer ett;
-    etimer_set(&ett, CLOCK_SECOND * 7);
+    etimer_set(&ett, CLOCK_SECOND * 30);
     PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&ett));
     printf("print qqch\n");
   }
@@ -260,6 +257,7 @@ PROCESS_THREAD(sensor_data, ev, data){
     uint8_t hum = random_rand() % 100;
 
     /* change uint8_t variables into string */
+
     int length_addr = snprintf(NULL, 0, "%d", linkaddr_node_addr.u8[0]);
     char addr_str[length_addr+1];
     snprintf(addr_str, length_addr + 1, "%d", linkaddr_node_addr.u8[0]);
@@ -276,7 +274,11 @@ PROCESS_THREAD(sensor_data, ev, data){
     char hum_str[length_hum+1];
     snprintf(hum_str, length_hum + 1, "%d", hum);
 
-    char* msg = "";
+    printf("temp: %s, hum : %s\n", temp_str, hum_str);
+
+    char* msg = malloc(strlen(addr_str) + strlen(".") + strlen(addr2_str)
+      + strlen(", 1 = ") + strlen(temp_str) + strlen(", 2 = ") + strlen(hum_str) + 1);
+
     strcat(msg, addr_str);
     strcat(msg, ".");
     strcat(msg, addr2_str);
@@ -285,9 +287,12 @@ PROCESS_THREAD(sensor_data, ev, data){
     strcat(msg, ", 2 = ");
     strcat(msg, hum_str);
 
-    packetbuf_copyfrom(msg, sizeof(msg));
+    packetbuf_copyfrom(msg, strlen(msg) + 1);
 
     runicast_send(&runicast, &tree_instance->parent->addr, MAX_RETRANSMISSION);
+    msg = "";
+    msg = NULL;
+    free(msg);
   }
 
   PROCESS_END();
