@@ -1,4 +1,6 @@
 #include "contiki.h"
+#include "contiki-lib.h"
+#include "contiki-net.h"
 #include "net/rime/rime.h"
 #include "net/rime/broadcast.h"
 #include "net/rime/unicast.h"
@@ -50,18 +52,12 @@ LIST(children_list);
 /* Processes */
 PROCESS(tree, "tree management");
 PROCESS(sensor_data, "data management");
-AUTOSTART_PROCESSES(&tree, &sensor_data);
+AUTOSTART_PROCESSES(&tree);
 /*---------------------------------------------------------------------------*/
 /* Auxiliary functions */
-/*static char* intToString(uint8_t i){
-  int length = snprintf(NULL, 0, "%d", i);
-  char str[length+1];
-  snprintf(str, length + 1, "%d", i);
-  return str;
-}*/
 
 static void chooseParent(){
-  struct node *n;
+  static struct node *n;
 
   for(n = list_head(passive_view); n != NULL; n = list_item_next(n)){
     if(tree_instance->parent == NULL){
@@ -82,7 +78,7 @@ static void unicast_recv(struct unicast_conn *c, const linkaddr_t *from){
     (char *)packetbuf_dataptr());
 
   /* we've receive a message from a potential parent, we add this node in the passive_view */
-  struct node *n;
+  static struct node *n;
 
   for(n = list_head(passive_view); n != NULL; n = list_item_next(n)){
     if(linkaddr_cmp(&n->addr, from)){
@@ -111,7 +107,7 @@ static void unicast_recv(struct unicast_conn *c, const linkaddr_t *from){
   chooseParent();
 
 }
-static void unicast_sent(struct unicast_conn *c, int status, int num_tx){
+static void sent_uc(struct unicast_conn *c, int status, int num_tx){
   const linkaddr_t *dest = packetbuf_addr(PACKETBUF_ADDR_RECEIVER);
   if(linkaddr_cmp(dest, &linkaddr_null)) {
     printf("addr null\n");
@@ -120,7 +116,7 @@ static void unicast_sent(struct unicast_conn *c, int status, int num_tx){
   printf("unicast message sent to %d.%d: status %d num_tx %d\n",
     dest->u8[0], dest->u8[1], status, num_tx);
 }
-static const struct unicast_callbacks unicast_call = {unicast_recv, unicast_sent};
+static const struct unicast_callbacks unicast_call = {unicast_recv, sent_uc};
 
 /*---------------------------------------------------------------------------*/
 /* broadcast callback function */
@@ -147,7 +143,7 @@ static void runicast_recv(struct runicast_conn *c, const linkaddr_t *from, uint8
   printf("runicast message received from %d.%d, seqno %d\n",
 	 from->u8[0], from->u8[1], seqno);
 
-   struct node *ch;
+   static struct node *ch;
 
    for(ch = list_head(children_list); ch != NULL; ch = list_item_next(ch)){
      if(linkaddr_cmp(&ch->addr, from)){
@@ -210,23 +206,22 @@ PROCESS_THREAD(tree, ev, data){
   unicast_open(&unicast, 146, &unicast_call);
   broadcast_open(&broadcast, 129, &broadcast_call);
 
-  etimer_set(&et, CLOCK_SECOND * DISCOVERY_TIME_WAIT);
-
-  while(!tree_instance->in_tree){
+  while(1){
+    if(tree_instance->in_tree){
+      break;
+    }
     printf("in while\n");
-
-    PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&et));
+    etimer_set(&et, CLOCK_SECOND * DISCOVERY_TIME_WAIT);
+    PROCESS_WAIT_EVENT_UNTIL(ev == PROCESS_EVENT_TIMER);
     /* We send discovery messages as long as we are not in the tree */
     packetbuf_clear();
 
     packetbuf_copyfrom(&msg, sizeof(msg));
-    broadcast_send(&broadcast);
-    printf("broadcast sent\n");
-
-    etimer_reset(&et);
+    int i = broadcast_send(&broadcast);
+    printf("broadcast sent %d\n", i);
   }
 
-  process_post(&sensor_data, PROCESS_EVENT_CONTINUE, NULL);
+  process_start(&sensor_data, NULL);
 
   while(1){
     /* we wait possible broadcast and unicast messages */
@@ -247,7 +242,7 @@ PROCESS_THREAD(sensor_data, ev, data){
 
   PROCESS_BEGIN();
 
-  PROCESS_WAIT_EVENT();
+  //PROCESS_WAIT_EVENT();
 
   runicast_open(&runicast, 144, &runicast_call);
 
