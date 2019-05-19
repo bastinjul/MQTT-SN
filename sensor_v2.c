@@ -16,6 +16,7 @@
 /* Define */
 #define MAX_ACTIVE_VIEW 1
 #define MAX_PASSIVE_VIEW 16
+#define MAX_CHILDREN 16
 #define DISCOVERY_TIME_WAIT 5
 #define DATA_TRANSFER 20
 #define DATA_GENERATION 16
@@ -46,7 +47,7 @@ static struct runicast_conn runicast;
 MEMB(passive_view_memb, struct node, MAX_PASSIVE_VIEW);
 LIST(passive_view);
 
-MEMB(children_list_memb, struct node, MAX_PASSIVE_VIEW);
+MEMB(children_list_memb, struct node, MAX_CHILDREN);
 LIST(children_list);
 /*---------------------------------------------------------------------------*/
 /* Processes */
@@ -56,6 +57,7 @@ AUTOSTART_PROCESSES(&tree);
 /*---------------------------------------------------------------------------*/
 /* Auxiliary functions */
 
+/* choose the best parent based on the rank and then the rssi */
 static void chooseParent(){
   struct node *n;
 
@@ -79,13 +81,14 @@ static void unicast_recv(struct unicast_conn *c, const linkaddr_t *from){
 
   /* we've receive a message from a potential parent, we add this node in the passive_view */
   static struct node *n;
-
+  /* check if the node is already in the passive_view*/
   for(n = list_head(passive_view); n != NULL; n = list_item_next(n)){
     if(linkaddr_cmp(&n->addr, from)){
       break;
     }
   }
 
+  /* if not we add the node to the passive view */
   if(n == NULL){
     n = memb_alloc(&passive_view_memb);
 
@@ -96,18 +99,16 @@ static void unicast_recv(struct unicast_conn *c, const linkaddr_t *from){
     n->rank = (uint8_t)atoi((char *) packetbuf_dataptr());
 
     list_add(passive_view, n);
+
+    n->rssi = packetbuf_attr(PACKETBUF_ATTR_RSSI);
+    /* if we were not yet in the tree, now we are */
+    if(!tree_instance->in_tree) {
+      tree_instance->in_tree = 1;
+    }
+
+    /* decision process to choose the best parent node*/
+    chooseParent();
   }
-
-  n->rssi = packetbuf_attr(PACKETBUF_ATTR_RSSI);
-
-  if(!tree_instance->in_tree) {
-    tree_instance->in_tree = 1;
-  }
-
-  chooseParent();
-
-  //TODO: if msg recv from parent and msg == 'period' -> set tree_instance->periodic = 1,
-  // else if msg == 'data_change' -> tree_instance->periodic = 0
 
 }
 static void sent_uc(struct unicast_conn *c, int status, int num_tx){
@@ -133,7 +134,7 @@ static void broadcast_recv(struct broadcast_conn *c, const linkaddr_t *from){
     char msg[length+1];
     snprintf(msg, length + 1, "%d", tree_instance->rank);
     packetbuf_clear();
-    packetbuf_copyfrom(&msg, sizeof(msg));
+    packetbuf_copyfrom(msg, strlen(msg) + 1);
     unicast_send(&unicast, from);
   }
 }
@@ -143,36 +144,68 @@ static const struct broadcast_callbacks broadcast_call = {broadcast_recv};
 /* runicast callback function */
 
 static void runicast_recv(struct runicast_conn *c, const linkaddr_t *from, uint8_t seqno){
-  printf("runicast message received from %d.%d, %s\n",
+  printf("runicast message received from %d.%d, '%s'\n",
 	 from->u8[0], from->u8[1], (char *)packetbuf_dataptr());
 
    if(linkaddr_cmp(&tree_instance->parent->addr, from)){
-     chooseParent();
+     /* if we receive a runicast message from our parent node
+     it's a message from the gateway, so we forward the runicast message
+     to all our children and we read the message */
+
+     /* if msg recv from parent and msg == 'periodic' -> set tree_instance->periodic = 1,
+      else if msg == 'data_change' -> tree_instance->periodic = 0
+      else it's not normal and we run the parentChoose process */
+
+      char *msg = (char *)packetbuf_dataptr();
+      char *periodic = "periodic";
+      char *data_change = "data_change";
+      if(strcmp(msg, periodic) == 0){
+        tree_instance->periodic = 1;
+        printf("Data sending set to periodic\n");
+      }
+      else if(strcmp(msg, data_change) == 0){
+        tree_instance->periodic = 0;
+        printf("Data sending set to non periodic\n");
+      }
+      else {
+        chooseParent();
+        return;
+      }
+
+      static struct node *ch;
+
+      for(ch = list_head(children_list); ch != NULL; ch = list_item_next(ch)){
+        runicast_send(&runicast, &ch->addr, MAX_RETRANSMISSION);
+      }
+      return;
    }
+   else {
 
-   static struct node *ch;
+     /* else add the node to our children_list if not yet in this list */
+     static struct node *ch;
 
-   for(ch = list_head(children_list); ch != NULL; ch = list_item_next(ch)){
-     if(linkaddr_cmp(&ch->addr, from)){
-       break;
+     for(ch = list_head(children_list); ch != NULL; ch = list_item_next(ch)){
+       if(linkaddr_cmp(&ch->addr, from)){
+         break;
+       }
      }
-   }
-
-   if(ch == NULL) {
-     ch = memb_alloc(&children_list_memb);
 
      if(ch == NULL) {
-       return;
+       ch = memb_alloc(&children_list_memb);
+
+       if(ch == NULL) {
+         return;
+       }
+
+       linkaddr_copy(&ch->addr, from);
+
+       list_add(children_list, ch);
      }
 
-     linkaddr_copy(&ch->addr, from);
+     /* then forward message from child to the gateway */
 
-     list_add(children_list, ch);
+     runicast_send(&runicast, &tree_instance->parent->addr, MAX_RETRANSMISSION);
    }
-
-   /* then forward message from child to the gateway */
-
-   runicast_send(&runicast, &tree_instance->parent->addr, MAX_RETRANSMISSION);
 }
 static void runicast_sent(struct runicast_conn *c, const linkaddr_t *to, uint8_t retransmissions){
   printf("runicast message sent to %d.%d, retransmissions %d\n",
@@ -228,7 +261,7 @@ PROCESS_THREAD(tree, ev, data){
     static struct etimer ett;
     etimer_set(&ett, CLOCK_SECOND * 30);
     PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&ett));
-    printf("print qqch\n");
+    printf("still alive\n");
   }
 
   PROCESS_END();
@@ -242,20 +275,22 @@ PROCESS_THREAD(sensor_data, ev, data){
 
   PROCESS_BEGIN();
 
-  //PROCESS_WAIT_EVENT();
-
   runicast_open(&runicast, 144, &runicast_call);
 
   while(1) {
     static struct etimer et;
+    /* wait a certain amount of time before sending data */
     if(tree_instance->periodic){
+      /* if we must send periodically, we wait a fixed amount of time */
       etimer_set(&et, CLOCK_SECOND * DATA_TRANSFER);
     }
     else {
+      /* else we wait a random amount of time */
       etimer_set(&et, CLOCK_SECOND * DATA_GENERATION + random_rand() % (CLOCK_SECOND * DATA_GENERATION));
     }
     PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&et));
 
+    /* random generation of the data */
     uint8_t temp = random_rand() % 50;
     uint8_t hum = random_rand() % 100;
 
@@ -282,6 +317,7 @@ PROCESS_THREAD(sensor_data, ev, data){
     char* msg = malloc(strlen(addr_str) + strlen(".") + strlen(addr2_str)
       + strlen(", 1 = ") + strlen(temp_str) + strlen(", 2 = ") + strlen(hum_str) + 1);
 
+    /* form the message */
     strcat(msg, addr_str);
     strcat(msg, ".");
     strcat(msg, addr2_str);
@@ -292,6 +328,7 @@ PROCESS_THREAD(sensor_data, ev, data){
 
     packetbuf_copyfrom(msg, strlen(msg) + 1);
 
+    /* send to our parent node */
     runicast_send(&runicast, &tree_instance->parent->addr, MAX_RETRANSMISSION);
     msg = "";
     msg = NULL;

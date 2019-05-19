@@ -13,10 +13,16 @@
 #include <string.h>
 /*---------------------------------------------------------------------------*/
 /* Define */
-
+#define MAX_CHILDREN 16
+#define MAX_RETRANSMISSION 10
 /*---------------------------------------------------------------------------*/
 /* Structures */
-
+struct node {
+  struct node *next;
+  linkaddr_t addr;
+  uint16_t rssi;
+  uint16_t rank;
+};
 /*---------------------------------------------------------------------------*/
 /* Variables */
 static struct broadcast_conn broadcast;
@@ -24,12 +30,12 @@ static struct unicast_conn unicast;
 static struct runicast_conn runicast;
 /*---------------------------------------------------------------------------*/
 /* Lists */
-
+MEMB(children_list_memb, struct node, MAX_CHILDREN);
+LIST(children_list);
 /*---------------------------------------------------------------------------*/
 /* Processes */
 PROCESS(tree, "tree construction");
-PROCESS(serial, "get serial messages");
-AUTOSTART_PROCESSES(&tree, &serial);
+AUTOSTART_PROCESSES(&tree);
 /*---------------------------------------------------------------------------*/
 /* Auxiliary functions */
 /*---------------------------------------------------------------------------*/
@@ -40,7 +46,16 @@ unicast_recv(struct unicast_conn *c, const linkaddr_t *from)
   printf("unicast message received from %d.%d\n",
 	 from->u8[0], from->u8[1]);
 }
-static const struct unicast_callbacks unicast_call = {unicast_recv};
+static void sent_uc(struct unicast_conn *c, int status, int num_tx){
+  const linkaddr_t *dest = packetbuf_addr(PACKETBUF_ADDR_RECEIVER);
+  if(linkaddr_cmp(dest, &linkaddr_null)) {
+    printf("addr null\n");
+    return;
+  }
+  printf("unicast message sent to %d.%d: status %d num_tx %d\n",
+    dest->u8[0], dest->u8[1], status, num_tx);
+}
+static const struct unicast_callbacks unicast_call = {unicast_recv, sent_uc};
 
 
 /*---------------------------------------------------------------------------*/
@@ -53,7 +68,7 @@ static void broadcast_recv(struct broadcast_conn *c, const linkaddr_t *from){
     packetbuf_copyfrom("1", sizeof("1"));
     unicast_send(&unicast, from);
 
-    //TODO: add node to children_list
+
 }
 static const struct broadcast_callbacks broadcast_call = {broadcast_recv};
 
@@ -61,7 +76,29 @@ static const struct broadcast_callbacks broadcast_call = {broadcast_recv};
 /* runicast callback function */
 
 static void runicast_recv(struct runicast_conn *c, const linkaddr_t *from, uint8_t seqno){
+  /* Printing the message so that the gateway can read the informations */
   printf("%s\n", (char *)packetbuf_dataptr());
+
+  /* Adding the node to our children_list */
+  static struct node *ch;
+
+  for(ch = list_head(children_list); ch != NULL; ch = list_item_next(ch)){
+    if(linkaddr_cmp(&ch->addr, from)){
+      break;
+    }
+  }
+
+  if(ch == NULL) {
+    ch = memb_alloc(&children_list_memb);
+
+    if(ch == NULL) {
+      return;
+    }
+
+    linkaddr_copy(&ch->addr, from);
+
+    list_add(children_list, ch);
+  }
 }
 static void runicast_sent(struct runicast_conn *c, const linkaddr_t *to, uint8_t retransmissions){
   printf("runicast message sent to %d.%d, retransmissions %d\n",
@@ -89,25 +126,30 @@ PROCESS_THREAD(tree, ev, data){
   runicast_open(&runicast, 144, &runicast_call);
 
   while(1){
-    static struct etimer et;
-    etimer_set(&et, CLOCK_SECOND * 7);
-    PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&et));
-    printf("print qqch\n");
-  }
-
-  PROCESS_END();
-}
-
-/*---------------------------------------------------------------------------*/
-/* Process to get input from gateway */
-PROCESS_THREAD(serial, ev, data){
-  PROCESS_BEGIN();
-
-  while(1){
     PROCESS_WAIT_EVENT();
     if(ev == serial_line_event_message && data != NULL){
       printf("input string : %s\n", (const char *) data);
-      //TODO: transfer msg to all children
+      /* Transfer the messages from the gateway to the nodes*/
+      static char* msg;
+      if(strcmp((const char*) data, "data_change") == 0){
+        msg = "data_change";
+      }
+      else {
+        /* by default set periodic */
+        msg = "periodic";
+      }
+      printf("msg : '%s'\n", msg);
+
+      static struct node *ch;
+      static struct etimer et;
+
+      for(ch = list_head(children_list); ch != NULL; ch = list_item_next(ch)){
+        etimer_set(&et, CLOCK_SECOND * 3);
+        PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&et));
+        printf("msg in for : '%s'\n", msg);
+        packetbuf_copyfrom(msg, strlen(msg) + 1);
+        runicast_send(&runicast, &ch->addr, MAX_RETRANSMISSION);
+      }
     }
   }
 
