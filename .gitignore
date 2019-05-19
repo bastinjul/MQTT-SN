@@ -1,4 +1,5 @@
 /sensor_nodes/obj_z1
+/gateway/obj_z1
 *.z1
 *.a
 *.map

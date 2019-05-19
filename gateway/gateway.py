@@ -4,7 +4,6 @@ import subprocess, sys, getopt, paho.mqtt.publish as publish
 def mqtt_publishing(data_tab):
     topic_temp = data_tab[0][:-1] + "/temperature"
     topic_hum = data_tab[0][:-1] + "/humidity"
-    print topic_temp
     msgs = [{'topic': topic_temp, 'payload': data_tab[3][:-1]},
     {'topic':topic_hum, 'payload': data_tab[6]}]
     publish.multiple(msgs)
