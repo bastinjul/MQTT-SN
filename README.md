@@ -27,3 +27,5 @@ MQTT-SN implementation in contiki for the course LINGI2146 - Mobile and Embedded
 
 ### Remark
 During the simulation you can enter inside the console of the *gateway.py* program the command `data_change` or `periodic`. The first one tells all sensor nodes to send their data only when the data change and the second tells to send data periodically.
+
+The `<topics_file>` contains the different subscriptions of a subscriber. These subscriptions have the form : `<node_id>/<topic>` where `<node_id>`is the rime id of a node inside contiki and `<topic>` is *temperature* or *humidity*. An example is `2.0/temperature`.
