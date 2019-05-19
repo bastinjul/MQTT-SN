@@ -1,0 +1,2 @@
+2.0/temperature
+2.0/humidity
