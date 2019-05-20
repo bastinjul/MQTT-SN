@@ -1,5 +1,13 @@
 /sensor_nodes/obj_z1
 /gateway/obj_z1
+/gateway/obj_native
+/gateway/obj_zoul
+*.bin
+*.elf
+*.native
 *.z1
 *.a
 *.map
+*.ihex
+*.hex
+*.zoul

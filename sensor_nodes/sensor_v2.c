@@ -96,7 +96,7 @@ static void unicast_recv(struct unicast_conn *c, const linkaddr_t *from){
       return;
     }
     linkaddr_copy(&n->addr, from);
-    n->rank = (uint8_t)atoi((char *) packetbuf_dataptr());
+    n->rank = (uint16_t)atoi((char *) packetbuf_dataptr());
 
     list_add(passive_view, n);
 
@@ -172,11 +172,7 @@ static void runicast_recv(struct runicast_conn *c, const linkaddr_t *from, uint8
         return;
       }
 
-      static struct node *ch;
-
-      for(ch = list_head(children_list); ch != NULL; ch = list_item_next(ch)){
-        runicast_send(&runicast, &ch->addr, MAX_RETRANSMISSION);
-      }
+      process_post(&tree, PROCESS_EVENT_CONTINUE, NULL);
       return;
    }
    else {
@@ -257,11 +253,25 @@ PROCESS_THREAD(tree, ev, data){
   process_start(&sensor_data, NULL);
 
   while(1){
-    /* we wait possible broadcast and unicast messages */
+    PROCESS_WAIT_EVENT();
+    /* we wait possible broadcast and (r)unicast messages */
     static struct etimer ett;
-    etimer_set(&ett, CLOCK_SECOND * 30);
-    PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&ett));
-    printf("still alive\n");
+    static struct node *ch;
+    static char* msg;
+    if(tree_instance->periodic){
+      msg = "periodic";
+    }
+    else {
+      msg = "data_change";
+    }
+
+    for(ch = list_head(children_list); ch != NULL; ch = list_item_next(ch)){
+      etimer_set(&ett, CLOCK_SECOND * 3);
+      PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&ett));
+
+      packetbuf_copyfrom(msg, strlen(msg)+1);
+      runicast_send(&runicast, &ch->addr, MAX_RETRANSMISSION);
+    }
   }
 
   PROCESS_END();
