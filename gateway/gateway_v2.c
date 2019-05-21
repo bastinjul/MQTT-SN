@@ -23,6 +23,12 @@ struct node {
   uint16_t rssi;
   uint16_t rank;
 };
+
+struct reachable {
+  struct reachable *next;
+  linkaddr_t from;
+  linkaddr_t addr;
+};
 /*---------------------------------------------------------------------------*/
 /* Variables */
 static struct broadcast_conn broadcast;
@@ -32,6 +38,9 @@ static struct runicast_conn runicast;
 /* Lists */
 MEMB(children_list_memb, struct node, MAX_CHILDREN);
 LIST(children_list);
+
+MEMB(reachable_nodes_memb, struct reachable, MAX_CHILDREN * MAX_CHILDREN);
+LIST(reachable_nodes);
 /*---------------------------------------------------------------------------*/
 /* Processes */
 PROCESS(tree, "tree construction");
@@ -98,6 +107,46 @@ static void runicast_recv(struct runicast_conn *c, const linkaddr_t *from, uint8
     linkaddr_copy(&ch->addr, from);
 
     list_add(children_list, ch);
+
+    static struct reachable *r;
+
+    r = memb_alloc(&reachable_nodes_memb);
+    if(r == NULL){
+      return;
+    }
+    linkaddr_copy(&r->addr, from);
+    linkaddr_copy(&r->from, from);
+    list_add(reachable_nodes, r);
+  }
+  else {
+    /* if already in our children, we check the message and get the id of the sender node */
+    linkaddr_t addr;
+    linkaddr_copy(&addr, &linkaddr_null);
+    char *f;
+    char *rmsg = (char *)packetbuf_dataptr();
+    f = strtok(rmsg, ".");
+    uint8_t id = (uint8_t)atoi(f);
+    addr.u8[0] = id;
+    if(!linkaddr_cmp(&addr, from)){
+      /* we add this node to the reachable_nodes if not yet */
+      static struct reachable *rs;
+
+      for(rs = list_head(reachable_nodes); rs != NULL; rs = list_item_next(rs)){
+        if(linkaddr_cmp(&rs->addr, &addr)){
+          break;
+        }
+      }
+
+      if(rs == NULL){
+        rs = memb_alloc(&reachable_nodes_memb);
+        if(rs == NULL){
+          return;
+        }
+        linkaddr_copy(&rs->addr, &addr);
+        linkaddr_copy(&rs->from, from);
+        list_add(reachable_nodes, rs);
+      }
+    }
   }
 }
 static void runicast_sent(struct runicast_conn *c, const linkaddr_t *to, uint8_t retransmissions){
@@ -128,28 +177,37 @@ PROCESS_THREAD(tree, ev, data){
   while(1){
     PROCESS_WAIT_EVENT();
     if(ev == serial_line_event_message && data != NULL){
-      printf("input string : %s\n", (const char *) data);
-      /* Transfer the messages from the gateway to the nodes*/
-      static char* msg;
-      if(strcmp((const char*) data, "data_change") == 0){
-        msg = "data_change";
-      }
-      else {
-        /* by default set periodic */
-        msg = "periodic";
-      }
-      printf("msg : '%s'\n", msg);
+      printf("msg recv from gateway : %s\n", (char *) data);
 
-      static struct node *ch;
-      static struct etimer et;
+      static struct reachable *r;
+      linkaddr_t addr;
+      linkaddr_copy(&addr, &linkaddr_null);
+      char *msg = (char *) data;
+      printf("msg before loop : '%s'\n", msg);
+      char *s = malloc(strlen((char *) data));
+      strcpy(s, (char *) data);
+      s = strtok(s, " ");
+      if(s != NULL){
+        s = strtok(NULL, " ");
+        if(s != NULL){
+          addr.u8[0] = (uint8_t)atoi(strtok(s, "."));
 
-      for(ch = list_head(children_list); ch != NULL; ch = list_item_next(ch)){
-        etimer_set(&et, CLOCK_SECOND * 3);
-        PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&et));
-        printf("msg in for : '%s'\n", msg);
-        packetbuf_copyfrom(msg, strlen(msg) + 1);
-        runicast_send(&runicast, &ch->addr, MAX_RETRANSMISSION);
+          for(r = list_head(reachable_nodes); r != NULL; r = list_item_next(r)){
+            if(linkaddr_cmp(&r->addr, &addr)){
+              packetbuf_clear();
+              printf("msg send : %s, len : %d\n", msg, strlen(msg));
+              packetbuf_copyfrom(msg, strlen(msg));
+              runicast_send(&runicast, &r->from, MAX_RETRANSMISSION);
+              break;
+            }
+          }
+        }else {
+            printf("error msg : '%s'\n", s);
+        }
+      } else {
+        printf("error msg : '%s'\n", s);
       }
+      free(s);
     }
   }
 
