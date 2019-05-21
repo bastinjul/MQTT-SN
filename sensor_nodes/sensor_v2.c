@@ -270,7 +270,7 @@ static void runicast_recv(struct runicast_conn *c, const linkaddr_t *from, uint8
           tree_instance->data_msg->hum = 1;
           printf("generation humidity on\n");
         }
-        else {
+        else if(strstr(period, "unsub")){
           /* unsubscibe for one topic */
           if(strstr(topic, "temperature")){
             tree_instance->data_msg->temp = 0;
