@@ -133,6 +133,7 @@ static void init_tree(){
 
 }
 
+/* generation of the first message */
 static char* firstMessage(){
   int length_addr = snprintf(NULL, 0, "%d", linkaddr_node_addr.u8[0]);
   char addr_str[length_addr + 1];
@@ -256,7 +257,7 @@ static void runicast_recv(struct runicast_conn *c, const linkaddr_t *from, uint8
       }
       printf("topic : '%s'\n", topic);
       if(strcmp(strtok(firstMessage(), " "), target) == 0){
-        /* if we are the target of the message */
+        /* if we are the target of the message, we treat this message */
 
         if(strstr(topic, "temperature")){
           tree_instance->data_msg->temp = 1;

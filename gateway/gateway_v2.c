@@ -175,15 +175,16 @@ PROCESS_THREAD(tree, ev, data){
   runicast_open(&runicast, 144, &runicast_call);
 
   while(1){
+    /* we wait for message from the gateway */
     PROCESS_WAIT_EVENT();
     if(ev == serial_line_event_message && data != NULL){
       printf("msg recv from gateway : %s\n", (char *) data);
 
+      /* we get the data */
       static struct reachable *r;
       linkaddr_t addr;
       linkaddr_copy(&addr, &linkaddr_null);
       char *msg = (char *) data;
-      printf("msg before loop : '%s'\n", msg);
       char *s = malloc(strlen((char *) data));
       strcpy(s, (char *) data);
       s = strtok(s, " ");
@@ -191,11 +192,11 @@ PROCESS_THREAD(tree, ev, data){
         s = strtok(NULL, " ");
         if(s != NULL){
           addr.u8[0] = (uint8_t)atoi(strtok(s, "."));
-
+          /* we send the message to the good node */
           for(r = list_head(reachable_nodes); r != NULL; r = list_item_next(r)){
             if(linkaddr_cmp(&r->addr, &addr)){
               packetbuf_clear();
-              printf("msg send : %s, len : %d\n", msg, strlen(msg));
+              printf("msg send: %s\n", msg);
               packetbuf_copyfrom(msg, strlen(msg));
               runicast_send(&runicast, &r->from, MAX_RETRANSMISSION);
               break;
