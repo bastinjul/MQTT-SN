@@ -1,5 +1,5 @@
 #!/usr/bin/python
-import sys, getopt, paho.mqtt.client as mqtt
+import sys, getopt, paho.mqtt.client as mqtt, time
 
 def on_connect(client, userdata, flags, rc):
     print("Connected with result code" + str(rc))
@@ -16,6 +16,15 @@ def mqtt_subscribe(topics):
 
     for x in topics:
         client.subscribe(x, 0)
+        time.sleep(10)
+
+    time.sleep(50)
+
+    for x in topics:
+        client.unsubscribe(x)
+        time.sleep(10)
+
+
 
     client.loop_forever()
 
@@ -40,7 +49,7 @@ def main(argv):
     fo = open(topics_file, "r")
     for x in fo:
         topics.append(x[:-1])
-
+    fo.close()
     mqtt_subscribe(topics)
 
 if __name__ == '__main__':

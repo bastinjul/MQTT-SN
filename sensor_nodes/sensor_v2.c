@@ -20,7 +20,7 @@
 #define DISCOVERY_TIME_WAIT 5
 #define DATA_TRANSFER 20
 #define DATA_GENERATION 16
-#define MAX_RETRANSMISSION 10
+#define MAX_RETRANSMISSION 5
 #define MAX_BUF_SIZE 300
 #define STILL_ALIVE 300
 /*---------------------------------------------------------------------------*/
@@ -234,24 +234,38 @@ static void runicast_recv(struct runicast_conn *c, const linkaddr_t *from, uint8
      it's a message from the gateway, so we forward the runicast message
      to the desired children if it's not for us */
 
+      char *period = malloc(strlen((char *)packetbuf_dataptr()));
       char *msg = (char *)packetbuf_dataptr();
-      char *period = strtok(msg, " ");
+      strcpy(period, msg);
+      strtok(period, " ");
       if(period == NULL){
         printf("invalid message received\n");
         return;
       }
+      printf("period : '%s'\n", period);
       char *target = strtok(NULL, " ");
       if(target == NULL){
         printf("invalid message received\n");
         return;
       }
+      printf("target : '%s'\n", target);
       char *topic = strtok(NULL, " ");
       if(topic == NULL){
         printf("invalid message received\n");
         return;
       }
+      printf("topic : '%s'\n", topic);
       if(strcmp(strtok(firstMessage(), " "), target) == 0){
         /* if we are the target of the message */
+
+        if(strstr(topic, "temperature")){
+          tree_instance->data_msg->temp = 1;
+          printf("generation temperature on\n");
+        }
+        else if(strstr(topic, "humidity")){
+          tree_instance->data_msg->hum = 1;
+          printf("generation humidity on\n");
+        }
         if(strcmp(period, "periodic") == 0){
           tree_instance->data_msg->periodic = 1;
           tree_instance->data_msg->waiting = 0;
@@ -262,20 +276,14 @@ static void runicast_recv(struct runicast_conn *c, const linkaddr_t *from, uint8
           tree_instance->data_msg->waiting = 0;
           printf("Data sending set to non periodic\n");
         }
-        else if(strstr(topic, "temperature")){
-          tree_instance->data_msg->temp = 1;
-          printf("generation temperature on\n");
-        }
-        else if(strstr(topic, "humidity")){
-          tree_instance->data_msg->hum = 1;
-          printf("generation humidity on\n");
-        }
         else if(strstr(period, "unsub")){
           /* unsubscibe for one topic */
           if(strstr(topic, "temperature")){
             tree_instance->data_msg->temp = 0;
+            printf("generation temperature off\n");
           } else if (strstr(topic, "humidity")){
             tree_instance->data_msg->hum = 0;
+            printf("generation humidity off\n");
           }
           if(!tree_instance->data_msg->temp && !tree_instance->data_msg->hum){
             tree_instance->data_msg->waiting = 1;
@@ -301,6 +309,7 @@ static void runicast_recv(struct runicast_conn *c, const linkaddr_t *from, uint8
           }
         }
       }
+      free(topic);
    }
    else {
 
@@ -340,9 +349,10 @@ static void runicast_recv(struct runicast_conn *c, const linkaddr_t *from, uint8
        /* if already in our children, we check the message and get the id of the sender node */
        linkaddr_t addr;
        linkaddr_copy(&addr, &linkaddr_null);
-       char *f;
+       char *f = malloc(strlen((char *) packetbuf_dataptr()) + 1);
        char *rmsg = (char *)packetbuf_dataptr();
-       f = strtok(rmsg, ".");
+       strcpy(f, rmsg);
+       f = strtok(f, ".");
        uint8_t id = (uint8_t)atoi(f);
        addr.u8[0] = id;
        if(!linkaddr_cmp(&addr, from)){
@@ -365,6 +375,7 @@ static void runicast_recv(struct runicast_conn *c, const linkaddr_t *from, uint8
            list_add(reachable_nodes, rs);
          }
        }
+       free(f);
      }
      char* msg = (char *)packetbuf_dataptr();
      char* ret;
@@ -372,6 +383,7 @@ static void runicast_recv(struct runicast_conn *c, const linkaddr_t *from, uint8
 
      if(tree_instance->data_msg->waiting || ret){
        /* then forward message from child to the gateway if not aggregate or we sleep */
+       printf("msg : '%s'\n", msg);
        runicast_send(&runicast, &tree_instance->parent->addr, MAX_RETRANSMISSION);
      }
      else {

@@ -1,2 +1,3 @@
 3.0/temperature
 4.0/humidity
+2.0/humidity
