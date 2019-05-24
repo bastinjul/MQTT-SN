@@ -2,12 +2,15 @@
 MQTT-SN implementation in contiki for the course LINGI2146 - Mobile and Embedded Computing
 
 ## Repository description
+- __/broker__ : contains the config file of mosquitto broker
 - __/gateway__ : contains all files relative to the gateway
   - __gateway_v2.c__ : file  containing the code of the sensor root node
   - __gateway.py__ : file running the gateway
 - __/sensor_node__ : contains all files relative to the sensor nodes
   - __sensor_v2.c__ : file containing the code of a sensor node
 - __/subscriber__ : contains all files relative to the subscribers of the MQTT network
+  - __subscriber.py__ : file running one subscriber
+  - __topics_subX.txt__ : file containing subscriber's topics 
 
 ## Requirements
 - *contiki* and *cooja*
